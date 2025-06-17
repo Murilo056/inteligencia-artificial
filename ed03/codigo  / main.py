@@ -1,129 +1,129 @@
+import pandas as pd
+import numpy as np
 import random
 import time
-import pandas as pd
+import os
+from typing import List
 
-# ----------------------------- Configuração do Problema -----------------------------
-ITEMS = [(10, 60), (20, 100), (30, 120), (5, 30), (15, 70)]
-CAPACIDADE_MAXIMA = 50
-POPULACAO_TAMANHO = 30
-GERACOES = 100
+# ===================== Função para ler o CSV =====================
+def load_function(csv_path):
+    df = pd.read_csv(csv_path)
+    coef = df['Coeficiente'].values
+    return coef
 
-# ----------------------------- Funções de Apoio -----------------------------
-def fitness(individuo):
-    peso_total, valor_total = 0, 0
-    for gene, (peso, valor) in zip(individuo, ITEMS):
-        if gene == 1:
-            peso_total += peso
-            valor_total += valor
-    return valor_total if peso_total <= CAPACIDADE_MAXIMA else 0
+# ===================== Função objetivo =====================
+def evaluate(individual: List[float], coefficients: List[float]):
+    return sum(x * c for x, c in zip(individual, coefficients))
 
-def gerar_individuo_aleatorio():
-    return [random.randint(0, 1) for _ in range(len(ITEMS))]
+# ===================== Operadores Genéticos =====================
+def one_point_crossover(p1, p2):
+    point = random.randint(1, len(p1) - 1)
+    return p1[:point] + p2[point:], p2[:point] + p1[point:]
 
-def gerar_individuo_heuristico():
-    ratio = sorted([(i, v/p) for i, (p, v) in enumerate(ITEMS)], key=lambda x: -x[1])
-    individuo = [0] * len(ITEMS)
-    peso_total = 0
-    for i, _ in ratio:
-        if peso_total + ITEMS[i][0] <= CAPACIDADE_MAXIMA:
-            individuo[i] = 1
-            peso_total += ITEMS[i][0]
-    return individuo
+def two_point_crossover(p1, p2):
+    p1_idx, p2_idx = sorted(random.sample(range(len(p1)), 2))
+    return (p1[:p1_idx] + p2[p1_idx:p2_idx] + p1[p2_idx:],
+            p2[:p1_idx] + p1[p1_idx:p2_idx] + p2[p2_idx:])
 
-def inicializar_populacao(metodo='aleatorio'):
-    if metodo == 'aleatorio':
-        return [gerar_individuo_aleatorio() for _ in range(POPULACAO_TAMANHO)]
-    else:
-        return [gerar_individuo_heuristico() for _ in range(POPULACAO_TAMANHO)]
+def uniform_crossover(p1, p2):
+    child1, child2 = [], []
+    for a, b in zip(p1, p2):
+        if random.random() < 0.5:
+            child1.append(a)
+            child2.append(b)
+        else:
+            child1.append(b)
+            child2.append(a)
+    return child1, child2
 
-def selecao_torneio(populacao, k=3):
-    selecionados = random.sample(populacao, k)
-    return max(selecionados, key=fitness)
+def mutate(individual, mutation_rate, bounds):
+    return [x + random.uniform(-1, 1) if random.random() < mutation_rate else x for x in individual]
 
-def crossover(pai1, pai2, tipo='um_ponto'):
-    if tipo == 'um_ponto':
-        ponto = random.randint(1, len(pai1) - 1)
-        return pai1[:ponto] + pai2[ponto:], pai2[:ponto] + pai1[ponto:]
-    elif tipo == 'dois_pontos':
-        p1, p2 = sorted(random.sample(range(len(pai1)), 2))
-        filho1 = pai1[:p1] + pai2[p1:p2] + pai1[p2:]
-        filho2 = pai2[:p1] + pai1[p1:p2] + pai2[p2:]
-        return filho1, filho2
-    elif tipo == 'uniforme':
-        filho1, filho2 = [], []
-        for g1, g2 in zip(pai1, pai2):
-            if random.random() < 0.5:
-                filho1.append(g1)
-                filho2.append(g2)
-            else:
-                filho1.append(g2)
-                filho2.append(g1)
-        return filho1, filho2
+# ===================== Inicialização =====================
+def random_population(size, num_vars, bounds):
+    return [[random.uniform(*bounds) for _ in range(num_vars)] for _ in range(size)]
 
-def mutacao(individuo, taxa):
-    return [gene if random.random() > taxa else 1 - gene for gene in individuo]
+# ===================== Critério de parada =====================
+def has_converged(history, epsilon=1e-4, window=10):
+    if len(history) < window:
+        return False
+    recent = history[-window:]
+    return max(recent) - min(recent) < epsilon
 
-# ----------------------------- Algoritmo Genético -----------------------------
-def algoritmo_genetico(config):
-    populacao = inicializar_populacao(config['inicializacao'])
-    melhor_individuo = max(populacao, key=fitness)
-    historico = [fitness(melhor_individuo)]
+# ===================== AG Principal =====================
+def genetic_algorithm(coefficients, objective='max',
+                      crossover_type='ponto_um', mutation_rate=0.01,
+                      population_size=50, generations=100,
+                      bounds=(-10, 10)):
+    num_vars = len(coefficients)
+    population = random_population(population_size, num_vars, bounds)
+    crossover_func = {
+        'ponto_um': one_point_crossover,
+        'dois_pontos': two_point_crossover,
+        'uniforme': uniform_crossover
+    }[crossover_type]
 
-    for _ in range(GERACOES):
-        nova_populacao = []
-        while len(nova_populacao) < POPULACAO_TAMANHO:
-            pai1 = selecao_torneio(populacao)
-            pai2 = selecao_torneio(populacao)
-            filho1, filho2 = crossover(pai1, pai2, config['crossover'])
-            filho1 = mutacao(filho1, config['mutacao'])
-            filho2 = mutacao(filho2, config['mutacao'])
-            nova_populacao.extend([filho1, filho2])
-        populacao = nova_populacao[:POPULACAO_TAMANHO]
-        atual_melhor = max(populacao, key=fitness)
-        historico.append(fitness(atual_melhor))
-        if config['parada'] == 'convergencia' and len(historico) > 5 and len(set(historico[-5:])) == 1:
+    best_fitness_history = []
+    best_individual = None
+    best_fitness = float('-inf') if objective == 'max' else float('inf')
+
+    for gen in range(generations):
+        fitness = [evaluate(ind, coefficients) for ind in population]
+        if objective == 'min':
+            fitness = [-f for f in fitness]
+
+        # Seleção por torneio binário
+        selected = [max(random.sample(list(zip(population, fitness)), 2), key=lambda x: x[1])[0] for _ in population]
+
+        # Crossover e mutação
+        new_population = []
+        for i in range(0, len(selected), 2):
+            p1, p2 = selected[i], selected[(i+1) % len(selected)]
+            c1, c2 = crossover_func(p1, p2)
+            new_population.extend([mutate(c1, mutation_rate, bounds), mutate(c2, mutation_rate, bounds)])
+
+        population = new_population[:population_size]
+
+        current_best = max(fitness) if objective == 'max' else -min(fitness)
+        current_individual = population[np.argmax(fitness)] if objective == 'max' else population[np.argmin(fitness)]
+
+        best_fitness_history.append(current_best)
+        if (objective == 'max' and current_best > best_fitness) or (objective == 'min' and current_best < best_fitness):
+            best_fitness = current_best
+            best_individual = current_individual
+
+        if has_converged(best_fitness_history):
             break
 
-    return fitness(max(populacao, key=fitness)), historico[-1]
+    return best_individual, best_fitness, gen + 1
 
-# ----------------------------- Execução e Comparação -----------------------------
-configuracoes = []
-tipos_crossover = ['um_ponto', 'dois_pontos', 'uniforme']
-taxas_mutacao = [0.01, 0.1, 0.3]
-inicializacoes = ['aleatorio', 'heuristica']
-criterios_parada = ['geracoes', 'convergencia']
+# ===================== Execução em lote =====================
+def run_all(csv_folder='codigo/csvs', output_csv='resultados.csv'): 
+    results = []
+    files = [f for f in os.listdir(csv_folder) if f.startswith('function_opt') and f.endswith('.csv')]
 
-for c in tipos_crossover:
-    for m in taxas_mutacao:
-        for i in inicializacoes:
-            for p in criterios_parada:
-                configuracoes.append({
-                    'crossover': c,
-                    'mutacao': m,
-                    'inicializacao': i,
-                    'parada': p
-                })
+    for file in files:
+        coef = load_function(os.path.join(csv_folder, file))
+        for objective in ['min', 'max']:
+            for crossover in ['ponto_um', 'dois_pontos', 'uniforme']:
+                for mutation in [0.01, 0.05, 0.1]:
+                    start = time.time()
+                    ind, val, gens = genetic_algorithm(coef, objective=objective,
+                                                       crossover_type=crossover,
+                                                       mutation_rate=mutation)
+                    end = time.time()
+                    results.append({
+                        'arquivo': file,
+                        'objetivo': objective,
+                        'crossover': crossover,
+                        'mutacao': mutation,
+                        'valor': val,
+                        'geracoes': gens,
+                        'tempo': round(end - start, 4)
+                    })
+    pd.DataFrame(results).to_csv(output_csv, index=False)
+    print(f"Arquivo '{output_csv}' foi gerado com sucesso!")
 
-resultados = []
-for cfg in configuracoes:
-    inicio = time.time()
-    valor_final, _ = algoritmo_genetico(cfg)
-    fim = time.time()
-    resultados.append({
-        'Crossover': cfg['crossover'],
-        'Mutação': cfg['mutacao'],
-        'Inicialização': cfg['inicializacao'],
-        'Critério Parada': cfg['parada'],
-        'Valor Final': valor_final,
-        'Tempo (s)': round(fim - inicio, 4)
-    })
-
-df_resultados = pd.DataFrame(resultados)
-df_resultados.sort_values(by='Valor Final', ascending=False, inplace=True)
-df_resultados.reset_index(drop=True, inplace=True)
-
-# ----------------------------- Exportar CSV -----------------------------
-df_resultados.to_csv("resultados.csv", index=False)
-print("Arquivo 'resultados.csv' gerado com sucesso!")
-print(df_resultados.head(10))
-
+if __name__ == '__main__':
+    run_all()
+    
